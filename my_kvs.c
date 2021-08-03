@@ -1,6 +1,9 @@
 #include "my_kvs.h"
 #include <cstdio>
+#include <stdbool.h>
 #include <cstring>
+#define XXH_INLINE_ALL
+#include "xxhash.h"
 
 void my_kvs_set_env(struct my_kvs *my_kvs, KVS_SET my_kvs_set, KVS_GET my_kvs_get, KVS_DEL my_kvs_del)
 {
@@ -26,23 +29,34 @@ int my_kvs_destroy(struct my_kvs *my_kvs)
 	return 0;
 }
 
-Node *insertionnode(Node * node, char *key, char *value)
+
+
+
+Node *insertionnode(Node * node, char *key, char *value,kvs_key_t klen, kvs_value_t vlen, uint64_t hash )
 {
 	if (node == NULL) {
 		Node *newnode = (Node*)malloc(sizeof(Node));
-		newnode->nkey = key;
-		newnode->nvalue = value;
+		newnode->nkey = (char*)malloc(sizeof(char)*klen);
+		newnode->nvalue = (char*)malloc(sizeof(char)*vlen);
+		newnode->hash = hash;
+		strcpy(newnode->nkey,key);
+		strcpy(newnode->nvalue,value);
 		newnode->right = NULL;
 		newnode->left = NULL;
 		return newnode;
-	} else if (strcmp (node->nkey , key)==1) {
-		node->left = insertionnode(node, key, value);
+	}
+
+
+	if (node->hash > hash) {
+		node->left = insertionnode(node->left, key, value,klen,vlen,hash);
 		return node;
-	} else if (strcmp(node->nkey, key)==-1) {
-		node->right = insertionnode(node, key, value);
+	} else if (node->hash < hash) {
+		node->right = insertionnode(node->right, key, value, klen ,vlen, hash);
 		return node;
-	} else if (strcmp(node->nkey , key)==0) {
-		node->nvalue = value;
+	} else if (node->hash == hash) {
+		free(node->nvalue);
+		node->nvalue = (char*)malloc(sizeof(char)*vlen);
+		strcpy(node->nvalue,value);
 		return node;
 	} else {
 		return NULL;
@@ -51,23 +65,25 @@ Node *insertionnode(Node * node, char *key, char *value)
 
 int my_kvs_set(struct my_kvs *my_kvs, struct kvs_key *key, struct kvs_value *value, struct kvs_context *ctx)
 {
-	if (count == 0) {
-		root = insertionnode(NULL, key->key, value->value);
-	} else {
-		insertionnode(root, key->key, value->value);
-	}
+	uint64_t hash;
+	hash = XXH64(key->key, key->klen,0);
+	Node *node = insertionnode(root, key->key, value->value, key->klen, value->vlen,hash);
+
+	if (root == NULL)
+		root = node;
+
 	return 0;
 }
 
-Node *searchnodes(Node * node, char *key)
+Node *searchnodes(Node * node, char *key, uint64_t hash)
 {
-	if (strcmp(node->nkey ,key)==1) {
-		searchnodes(node->left, key);
+	if (node->hash > hash) {
+		searchnodes(node->left, key,hash);
 		return node;
-	} else if (strcmp(node->nkey, key)==-1) {
-		searchnodes(node->right, key);
+	} else if (node->hash < hash) {
+		searchnodes(node->right, key,hash);
 		return node;
-	} else if (strcmp(node->nkey, key)==0) {
+	} else if (node->hash == hash ) {
 		return node;
 	} else {
 		return NULL;
@@ -76,84 +92,90 @@ Node *searchnodes(Node * node, char *key)
 
 int my_kvs_get(struct my_kvs *my_kvs, struct kvs_key *key, struct kvs_value *value, struct kvs_context *ctx)
 {
-	Node *schnode = searchnodes(root, key->key);
-	//printf("%s", schnode->nvalue);
+	uint64_t hash;
+	hash = XXH64(key->key, key->klen,0);
+	Node *schnode = searchnodes(root, key->key, hash);
 	strcpy(value->value, schnode->nvalue);
 	return 0;
 }
 
-void deletionnode(Node * pnode, Node * node, char *key)
+
+
+void freenode(Node *node)
 {
-	if (node != NULL) {
-		if (strcmp(node->nkey , key)!=0) {	// 내가 삭제할 키랑 현재 노드의 키가 같지 않을 때
-			if (strcmp(node->nkey, key)==1)	{
-				deletionnode(node, node->left, key);	// 루트보다 내가 찾는 키가 작으면 왼쪽으로 가서 재귀
-			} else if (strcmp(node->nkey, key)==-1) {
-				deletionnode(node, node->right, key);	// 반대일 때는 오른쪽으로 가서 재귀
-			}
-		} else {	// 현재 노드랑 내가 지울 노드의 키가 같을 때
-			if (node->left == NULL && node->right != NULL) {	// 그 노드의 위치에 대한 경우의수 4가지 준비하고
-				if (pnode == NULL) {	// 지울 노드가 루트일 때는 루트 자식들로 루트를 대체하고 ( 포인터 느낌) 그리고 원래 루트는 프리시켜준 다음 루트노드 위치 갱신 후 함수 끝내주기
-					node = node->right;
-					free(root);
-					root = node;
-					return;
-				} else if (pnode->right == node) {
-					pnode->right = node->right;
-				} else if (pnode->left == node) {
-					pnode->left = node->right;
-				} else
-					printf("error");
-				free(node);
-			} else if (node->left != NULL && node->right == NULL) {
-				if (pnode == NULL) {
-					node = node->left;
-					free(root);
-					root = node;
-					return;
-				} else if (pnode->right == node) {
-					pnode->right = node->left;
-				} else if (pnode->left == node) {
-					pnode->left = node->left;
-				} else
-					printf("error");
-				free(node);
-			} else if (node->left != NULL && node->right != NULL) {
-				if (pnode == NULL) {
-					node = node->left;
-					free(root);
-					root = node;
-					return;
-				} else if (pnode->right == node) {
-					pnode->right = node->left;
-				} else if (pnode->left == node) {
-					node->left->right = node->right;
-					pnode->left = node->left;
-				} else
-					printf("error");
-				free(node);
-			} else {
-				if (pnode == NULL) {
-					free(root);
-					root = NULL;
-					return;
-				}
-				if (pnode->right == node) {
-					pnode->right = NULL;
-				}
-				if (pnode->left == node) {
-					pnode->left = NULL;
-				}
-				free(node);
-			}
-		}
-	}
+	free(node->nkey);
+	free(node->nvalue);
+	free(node);
 	return;
 }
 
-int my_kvs_del(struct my_kvs *my_kvs, struct kvs_key *key, struct kvs_context *ctx)
+Node * findmin(Node *root)
 {
-	deletionnode(NULL, root, key->key);
-	return 0;
+	Node *min = root;
+	while(min->left != NULL){
+		min = min->left;
+	}
+	return min;
+}
+
+Node * deletionnode( Node * node, uint64_t hash,bool *success)
+{
+	Node *pnode= NULL;
+//	int count = 0; 여기다 선언하면 재귀할 때 영향받음
+
+
+	if (node == NULL){
+		return NULL;
+	}
+
+
+	if (node->hash != hash) {	// 내가 삭제할 키랑 현재 노드의 키가 같지 않을 때
+		if (node->hash >hash) {
+			node->left=deletionnode(node->left,hash,success);	// 루트보다 내가 찾는 키가 작으면 왼쪽으로 가서 재귀
+		} else if (node->hash < hash) {
+			node->right= deletionnode(node->right, hash,success);	// 반대일 때는 오른쪽으로 가서 재귀
+		}
+	}
+
+	// 현재 노드랑 내가 지울 노드의 키가 같을 때
+	 else{
+		 if (node->left != NULL && node->right != NULL) {
+			pnode = findmin(node->right);
+			node->hash=pnode->hash;
+			free(node->nkey);
+			free(node->nvalue);
+			node->nkey = pnode->nkey;
+			node->nvalue=pnode->nvalue;
+			count ++;
+			node->right = deletionnode(node->right,pnode->hash,success);
+		} else {
+			pnode = (node ->left == NULL) ? node->right : node->left;
+
+			if (count == 0){
+				freenode(node);
+			}
+			else {
+				free(node);
+				count = 0; // 큰 가르침
+			}
+			*success = true;
+			return pnode;
+		}
+	}
+	return node;
+}
+
+int my_kvs_del(struct my_kvs *my_kvs, struct kvs_key *key, struct kvs_context *ctx)
+{      
+       	bool success=false;	
+	uint64_t hash;
+	hash = XXH64(key->key, key->klen,0);
+	root = deletionnode(root,hash,&success);
+
+
+	if (success == true)
+		return 0;
+	else
+		return -1;
 }
 
