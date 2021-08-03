@@ -19,6 +19,7 @@ typedef struct _Node {
 	char *nvalue;
 	struct _Node *right;
 	struct _Node *left;
+	//hash로 비교할거면 여기다가 uint64_t hash; 추가하면됨
 } Node;
 
 
